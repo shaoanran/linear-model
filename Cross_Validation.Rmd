@@ -1,0 +1,234 @@
+---
+title: "Cross_Validation"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(mgcv)
+library(modelr)
+
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  fig.width = 8,
+  fig.height = 6,
+  out.width = "90%"
+)
+
+options(
+  ggplot2.continuous.colour = "viridis",
+  ggplot2.continuous.fill = "viridis"
+)
+
+scale_colour_discrete = scale_colour_viridis_d
+scale_fill_discrete = scale_fill_viridis_d
+
+theme_set(theme_minimal() + theme(legend.position = "bottom"))
+```
+
+
+generate a dataset
+
+```{r}
+nonlin_df = 
+  tibble(
+    id = 1:100,
+    x = runif(100, 0, 1),
+    y = 1 - 10 * (x - .3) ^ 2 + rnorm(100, 0, .3)
+  )
+
+nonlin_df %>% 
+  ggplot(aes(x = x, y = y)) + 
+  geom_point() + theme_bw()
+
+```
+
+Training and testing
+
+
+```{r}
+train_df = sample_frac(nonlin_df, size = .8)
+  test_df = anti_join(nonlin_df, train_df, by = "id")
+
+  ggplot(train_df, aes(x = x, y = y)) + 
+  geom_point() + 
+  geom_point(data = test_df, color = "red")
+
+  
+```
+
+fit three models of varying goodness 
+```{r}
+linear_mod = lm( y ~ x, data = train_df)
+smooth_mod = mgcv::gam(y ~ s(x), data = train_df)
+wiggly_mod = mgcv::gam(y ~ s(x, k = 30), sp = 10e-6, data = train_df)
+```
+ 
+ let's look at some fits.
+ 
+```{r}
+train_df %>% 
+  add_predictions(linear_mod) %>% 
+  ggplot(aes(x = x, y = y)) +
+    geom_point() + 
+   geom_line(aes(y = pred), color = "red")
+train_df %>% 
+  add_predictions(smooth_mod) %>% 
+  ggplot(aes(x = x, y = y)) +
+    geom_point() + 
+   geom_line(aes(y = pred), color = "red")
+train_df %>% 
+  add_predictions(wiggly_mod) %>% 
+  ggplot(aes(x = x, y = y)) +
+    geom_point() + 
+   geom_line(aes(y = pred), color = "red")
+  
+```
+
+
+```{r}
+rmse(linear_mod, test_df)
+rmse(smooth_mod, test_df)
+rmse(wiggly_mod, test_df)
+```
+
+testing data is involved when we see which model is better. 
+0.3 is better than 0.8. 
+
+if train_df replace test_df, value for train is lower than test. the size is larger and standard error will decreaase. 
+
+## do this all using `modelr`
+
+```{r}
+cv_df =
+  crossv_mc(nonlin_df, 100)
+```
+
+one note about resample
+
+```{r}
+cv_df %>% pull(train) %>% .[[3]] %>% as_tibble
+```
+
+transfer to data frame.
+
+```{r}
+cv_df =
+  cv_df %>% 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble))
+```
+
+try to fitting the linear model to all of these.
+
+```{r}
+cv_results = 
+cv_df %>% 
+  mutate(
+    linear_mods = map(.x = train, ~lm(y ~ x, data = .x)),
+    smooth_mods = map(.x = train, ~gam(y ~ s(x), data = .x)),
+    wiggly_mod = map(.x = train, ~gam(y ~ s(x, k = 30), sp = 10e-6, data = .x)),
+    rmse_lin = map2_dbl(.x = linear_mods, .y = test, ~rmse(.x,.y)),
+    rmse_smo = map2_dbl(.x = smooth_mods, .y = test, ~rmse (.x,.y)),
+     rmse_wig = map2_dbl(wiggly_mod, test, ~rmse (model = .x,data = .y))
+  ) 
+  
+```
+
+
+map2, has two column. 
+
+```{r}
+cv_results %>% 
+  select(starts_with("rmse")) %>% 
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") %>% 
+  mutate(model = fct_inorder(model)) %>% 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
+```
+smooth model is the best!!!!!  
+
+
+## child growth
+
+
+```{r}
+child_growth = read_csv("./nepalese_children.csv")
+
+```
+
+
+```{r}
+child_growth %>% 
+  ggplot(aes(x = weight, y = armc)) +
+  geom_point()
+
+child_growth =
+  child_growth %>% 
+  mutate(weight_cp = (weight > 7) * (weight - 7))
+```
+
+add change point term
+
+
+```{r}
+linear_mod    = lm(armc ~ weight, data = child_growth)
+pwl_mod    = lm(armc ~ weight + weight_cp, data = child_growth)
+smooth_mod = gam(armc ~ s(weight), data = child_growth)
+```
+
+
+```{r}
+ cv_df =
+  crossv_mc(child_growth, 100) %>% 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble))
+
+```
+
+```{r}
+cv_df = 
+  cv_df %>% 
+  mutate(linear_mod  = map(train, ~lm(armc ~ weight, data = .x)),
+         pwl_mod     = map(train, ~lm(armc ~ weight + weight_cp, data = .x)),
+         smooth_mod  = map(train, ~gam(armc ~ s(weight), data = as_tibble(.x)))) %>% 
+  mutate(rmse_linear = map2_dbl(linear_mod, test, ~rmse(model = .x, data = .y)),
+         rmse_pwl    = map2_dbl(pwl_mod, test, ~rmse(model = .x, data = .y)),
+         rmse_smooth = map2_dbl(smooth_mod, test, ~rmse(model = .x, data = .y)))
+```
+
+
+```{r}
+cv_df %>% 
+  select(starts_with("rmse")) %>% 
+pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") %>% 
+  mutate(model = fct_inorder(model)) %>% 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

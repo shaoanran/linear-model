@@ -1,0 +1,192 @@
+---
+title: "linear_models"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  fig.width = 8,
+  fig.height = 6,
+  out.width = "90%"
+)
+
+options(
+  ggplot2.continuous.colour = "viridis",
+  ggplot2.continuous.fill = "viridis"
+)
+
+scale_colour_discrete = scale_colour_viridis_d
+scale_fill_discrete = scale_fill_viridis_d
+
+theme_set(theme_minimal() + theme(legend.position = "bottom"))
+```
+
+```{r}
+library(tidyverse)
+library(p8105.datasets)
+
+set.seed(1)
+```
+
+
+```{r}
+data("nyc_airbnb")
+
+nyc_airbnb = 
+  nyc_airbnb %>% 
+  mutate(stars = review_scores_location / 2) %>% 
+  rename(
+    boro = neighbourhood_group,
+    neighborhood = neighbourhood) %>% 
+  filter(boro != "Staten Island") %>% 
+  select(price, stars, boro, neighborhood, room_type)
+```
+
+fit a first linear model!
+
+```{r}
+fit = lm(price ~ stars + boro, data = nyc_airbnb)
+```
+
+```{r, eval = FALSE}
+fit
+
+summary(fit)
+coef(fit)
+summary(fit)$coef
+```
+
+
+## tidy the results instead 
+
+```{r}
+fit %>% 
+  broom::tidy() %>% 
+  mutate(
+    term = str_replace(term, "boro","Boro:")) %>% 
+    knitr::kable(digits = 3)
+
+## quick collection of summary of model
+fit %>% 
+  broom::glance()
+```
+
+
+## Take a look at factors....
+
+```{r}
+nyc_airbnb = 
+nyc_airbnb %>% 
+  mutate(
+    boro = fct_infreq(boro),
+    room_type = fct_infreq(room_type)
+  )  
+```
+
+refit the last model
+
+very similar, shift the reference category to most freq. 
+
+ 
+```{r}
+fit = lm(price ~ stars + boro, data = nyc_airbnb)
+
+fit %>% 
+  broom::tidy()
+summary(fit)
+```
+
+refit the last model
+```{r}
+fit = lm(price)
+```
+
+## diagnostics 
+
+```{r}
+modelr::add_residuals(nyc_airbnb, fit) %>% 
+  ggplot(aes(x = stars, y = resid)) +
+    geom_point() +
+    ylim(-500,500)
+
+modelr::add_predictions(nyc_airbnb, fit)
+```
+
+
+## nesting 
+
+how similar or how different
+```{r}
+fit_interaction = lm(price ~ stars * boro + room_type * boro, data = nyc_airbnb)
+
+fit_interaction %>% 
+  broom::tidy()
+```
+
+fit differnet stars and room types into each boros. 
+
+```{r}
+nyc_airbnb %>% 
+  filter(boro == "Brooklyn") %>% 
+  lm(price ~ stars + room_type, data = .) %>% 
+  broom::tidy()
+```
+
+
+map this. 
+```{r}
+nyc_airbnb %>% 
+   nest(data = -boro) %>% 
+  mutate(
+    models =  map(.x = data, ~lm(price ~ stars + room_type, data = .x)),
+    results = map(models, broom::tidy)
+  ) %>% 
+  select(boro,results) %>% 
+    unnest(results)
+```
+
+
+let's nest neighbourhood 
+```{r}
+manhattan_nest_lm_results = 
+nyc_airbnb %>% 
+    filter(boro == "Manhattan") %>% 
+   nest(data = -neighborhood) %>% 
+  mutate(
+    models =  map(.x = data, ~lm(price ~ stars + room_type, data = .x)),
+    results = map(models, broom::tidy)
+  ) %>% 
+  view()
+  select(neighborhood,results) %>% 
+    unnest(results) %>%
+
+
+
+manhattan_nest_lm_results %>% 
+  filter(str_detect(term, "room_type")) %>% 
+  ggplot(aes(x = neighborhood, y = estimate)) + 
+  geom_point() + 
+  facet_wrap(~term) + 
+  theme(axis.text.x = element_text(angle = 80, hjust = 1))
+```
+
+
+```{r} 
+nyc_airbnb %>% 
+  filter(neighborhood == "NoHo", room_type == "Shared room")
+```
+
+
+
+
+
+
+
+
